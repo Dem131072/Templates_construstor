@@ -3,14 +3,8 @@ name = "doc_template_app"
 version = "0.1.0"
 edition = "2021"
 
-# cargo +nightly xwin build --target i686-win7-windows-msvc -Z build-std=core,std,alloc,panic_abort --release
-
-# [profile.dev]
-# panic = "abort"
 
 [profile.release]
-# lto = true
-# opt-level = "s"
 panic = "abort"
 
 [dependencies]
@@ -29,9 +23,5 @@ zip = { version = "7.2.0", default-features = false, features = ["deflate", "tim
 quick-xml = "0.31"
 webbrowser = "0.8"
 roxmltree = "0.20"
-# clap = "3"
-# walkdir = "2"
-# prettytable = "0.10.0"
-# sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"]}
 actix-web-httpauth = "0.8"
 env_logger = "0.11"
