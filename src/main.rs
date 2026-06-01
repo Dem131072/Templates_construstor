@@ -18,7 +18,7 @@ use actix_files::{Files, NamedFile};
 use actix_multipart::Multipart;
 use actix_web::error::{ErrorBadRequest, ErrorInternalServerError, ErrorNotFound, ErrorPayloadTooLarge};
 use actix_web::http::header::LOCATION;
-use actix_web::{web, App, Error, HttpResponse, HttpServer};
+use actix_web::{web, App, Error, HttpResponse, HttpServer, middleware::Logger};
 use chrono::{Datelike, Local, NaiveDate, NaiveTime, Timelike};
 use futures::{StreamExt, TryStreamExt};
 use quick_xml::escape::escape;
@@ -30,7 +30,7 @@ use roxmltree::{Document, Node, ParsingOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, json, to_string_pretty};
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File, metadata};
+use std::fs::{self, File, metadata, OpenOptions};
 use std::io::{BufWriter, Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -1204,6 +1204,7 @@ fn format_value(type_: &str, format_: Option<&str>, value: &str) -> String {
     }
 }
 
+// Сбор плейхолдеров по вхождению
 fn get_placeholders_from_template(
     template_path: &Path,
 ) -> Result<HashSet<String>, Box<dyn std::error::Error>> {
@@ -1215,11 +1216,14 @@ fn get_placeholders_from_template(
             ..Default::default()
         },
     )?;
+    let mut placeholders = Vec::new();
     let mut set = HashSet::new();
     for p_node in collect_all_paragraphs(doc.root()) {
         let raw_text = build_raw_text(p_node);
         for ph in find_placeholder_matches(&raw_text) {
-            set.insert(ph.body);
+            if set.insert(ph.body.clone()) {
+                placeholders.push(ph.body);
+            }
         }
     }
     Ok(set)
@@ -1498,13 +1502,11 @@ async fn index(
     render_html(&tera, "index.html", &context)
 }
 
+// Сортировка убрана
 fn build_placeholder_structs(
     template_path: &Path,
 ) -> Result<Vec<Placeholder>, Box<dyn std::error::Error>> {
-    let mut placeholders: Vec<String> = get_placeholders_from_template(template_path)?
-        .into_iter()
-        .collect();
-    placeholders.sort();
+    let placeholders = get_placeholders_from_template(template_path)?;
     Ok(placeholders
         .into_iter()
         .map(|ph| {
@@ -1674,8 +1676,6 @@ async fn delete_saved(
     )
 }
 
-/*===================== main =====================*/
-
 fn ensure_custom_types_file() -> std::io::Result<()> {
     if !Path::new(CUSTOM_TYPES_FILE).exists() {
         fs::write(CUSTOM_TYPES_FILE, "[]")?;
@@ -1683,10 +1683,30 @@ fn ensure_custom_types_file() -> std::io::Result<()> {
     Ok(())
 }
 
+fn init_logger() -> std::io::Result<()> {
+    let path = Path::new(SAVED_DIR).join("logs.txt");
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let _ = env_logger::Builder::from_env(env_logger::Env::default()
+            .default_filter_or("actix_web::middleware::logger=info"))
+        .target(env_logger::Target::Pipe(Box::new(file)))
+        .format(|buf, record| {
+            writeln!(buf, "{}", record.args())
+        })
+        .try_init();
+
+    Ok(())
+}
+
+/*===================== main =====================*/
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     fs::create_dir_all(DOC_TEMPLATES_DIR)?;
     fs::create_dir_all(SAVED_DIR)?;
+    init_logger()?;
     ensure_custom_types_file()?;
     let settings = load_settings();
     let app_state: web::Data<AppState> = web::Data::new(Arc::new(RwLock::new(settings)));
@@ -1694,6 +1714,7 @@ async fn main() -> std::io::Result<()> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     let server = HttpServer::new(move || {
         App::new()
+            .wrap(Logger::new(r#"[%t] %a "%r" %s"#))
             .app_data(web::Data::new(tera.clone()))
             .app_data(app_state.clone())
             .service(Files::new("/static", "./static").show_files_listing())
