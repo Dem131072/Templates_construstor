@@ -33,7 +33,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, metadata, OpenOptions};
 use std::io::{BufWriter, Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex};
+use std::time::Instant;
 use tera::{Context, Tera};
 use webbrowser;
 use zip::write::FileOptions;
@@ -73,6 +74,8 @@ impl Default for Settings {
 }
 
 type AppState = Arc<RwLock<Settings>>;
+type FillTime = Mutex<HashMap<String, Instant>>;
+
 fn load_settings() -> Settings {
     Settings::default()
 }
@@ -142,6 +145,15 @@ struct ConstructorRequest {
     template_name: String,
     force: bool,
     target_folder: String,
+}
+
+#[derive(Debug, Default)]
+struct DocStat {
+    chars: usize,
+    words: usize,
+    placeholders_total: usize,
+    placeholders_unique: usize,
+    placeholders_types: HashMap<String, usize>,
 }
 
 fn safe_file_name(raw: &str) -> Result<String, Error> {
@@ -1207,7 +1219,7 @@ fn format_value(type_: &str, format_: Option<&str>, value: &str) -> String {
 // Сбор плейхолдеров по вхождению
 fn get_placeholders_from_template(
     template_path: &Path,
-) -> Result<HashSet<String>, Box<dyn std::error::Error>> {
+) -> Result<(Vec<String>, DocStat), Box<dyn std::error::Error>> {
     let xml = read_docx_document_xml(template_path)?;
     let doc = Document::parse_with_options(
         &xml,
@@ -1217,16 +1229,24 @@ fn get_placeholders_from_template(
         },
     )?;
     let mut placeholders = Vec::new();
+    let mut logs = DocStat::default();
     let mut set = HashSet::new();
     for p_node in collect_all_paragraphs(doc.root()) {
         let raw_text = build_raw_text(p_node);
+        logs.chars += raw_text.chars().count();
+        logs.words += raw_text.split_whitespace().count();
         for ph in find_placeholder_matches(&raw_text) {
-            if set.insert(ph.body.clone()) {
-                placeholders.push(ph.body);
+            logs.placeholders_total += 1;
+            let body = ph.body;
+            let (_name, field_type, _format) = parse_placeholder(&body);
+            *logs.placeholders_types.entry(field_type).or_insert(0) += 1;
+            if set.insert(body.clone()) {
+                placeholders.push(body);
             }
         }
     }
-    Ok(set)
+    logs.placeholders_unique = placeholders.len();
+    Ok((placeholders, logs))
 }
 
 async fn parse_fill_form(mut payload: Multipart) -> Result<HashMap<String, String>, Error> {
@@ -1502,11 +1522,10 @@ async fn index(
     render_html(&tera, "index.html", &context)
 }
 
-// Сортировка убрана
 fn build_placeholder_structs(
     template_path: &Path,
 ) -> Result<Vec<Placeholder>, Box<dyn std::error::Error>> {
-    let placeholders = get_placeholders_from_template(template_path)?;
+    let (placeholders, _) = get_placeholders_from_template(template_path)?;
     Ok(placeholders
         .into_iter()
         .map(|ph| {
@@ -1525,9 +1544,11 @@ fn build_placeholder_structs(
 async fn fill_get(
     tera: web::Data<Tera>,
     settings: web::Data<AppState>,
+    timings: web::Data<FillTime>,
     path: web::Path<String>,
 ) -> Result<HttpResponse, Error> {
     let relative_path = path.into_inner();
+    timings.lock().unwrap().insert(relative_path.clone(), Instant::now());
     let settings = settings.read().unwrap();
     let template_path = resolve_template_file(&settings.templates_dir, &relative_path)?;
     if !template_path.exists() {
@@ -1581,16 +1602,23 @@ fn format_form_value(ph: &str, form: &HashMap<String, String>) -> String {
 async fn fill_post(
     payload: Multipart,
     settings: web::Data<AppState>,
+    timings: web::Data<FillTime>,
     path: web::Path<String>,
 ) -> Result<HttpResponse, Error> {
     let relative_path = path.into_inner();
     let form = parse_fill_form(payload).await?;
-    let settings = settings.read().unwrap();
-    let template_path = resolve_template_file(&settings.templates_dir, &relative_path)?;
+    let template_path;
+    let opened_at = timings.lock().unwrap().remove(&relative_path);
+    let saved_dir;
+    {
+        let settings = settings.read().unwrap();
+        template_path = resolve_template_file(&settings.templates_dir, &relative_path)?;
+        saved_dir = settings.saved_dir.clone();
+    }
     if !template_path.exists() {
         return Err(ErrorNotFound("Шаблон не найден"));
     }
-    let placeholders =
+    let (placeholders, logs) =
         get_placeholders_from_template(&template_path).map_err(ErrorInternalServerError)?;
     if placeholders.is_empty() {
         return Ok(found(format!("/fill/{relative_path}?error=no_placeholders")));
@@ -1599,15 +1627,33 @@ async fn fill_post(
         .iter()
         .map(|ph| (ph.clone(), format_form_value(ph, &form)))
         .collect();
+    let not_empty = replacements
+        .values()
+        .filter(|value| !value.trim().is_empty())
+        .count();
     let template_base = template_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("filled");
     let today = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let output_name = format!("{template_base}-{today}.docx");
-    let save_path = settings.saved_dir.join(output_name);
+    let save_path = saved_dir.join(output_name);
     fill_docx_template(&template_path, &save_path, &replacements)
         .map_err(ErrorInternalServerError)?;
+    let elapsed = opened_at
+        .map(|started| format!("{:.3}", started.elapsed().as_secs_f64()))
+        .unwrap_or_else(|| "unknown".to_string());
+    log::info!(
+        "Заполненный шаблон=\"{}\"\nКоличество символов={}\nКоличество слов={}\nВсе плейсхолдеры={}\nУникальные плейсхолдеры={}\nНепустые замены={}\nТипы плейсхолдеров={:?}\nВремя={}",
+        relative_path,
+        logs.chars,
+        logs.words,
+        logs.placeholders_total,
+        logs.placeholders_unique,
+        not_empty,
+        logs.placeholders_types,
+        elapsed,
+    );
     Ok(found("/history"))
 }
 
@@ -1690,7 +1736,7 @@ fn init_logger() -> std::io::Result<()> {
         .append(true)
         .open(path)?;
     let _ = env_logger::Builder::from_env(env_logger::Env::default()
-            .default_filter_or("actix_web::middleware::logger=info"))
+            .default_filter_or("actix_web::middleware::logger=info,doc_template_app=info"))
         .target(env_logger::Target::Pipe(Box::new(file)))
         .format(|buf, record| {
             writeln!(buf, "{}", record.args())
@@ -1710,13 +1756,15 @@ async fn main() -> std::io::Result<()> {
     ensure_custom_types_file()?;
     let settings = load_settings();
     let app_state: web::Data<AppState> = web::Data::new(Arc::new(RwLock::new(settings)));
+    let fill_time: web::Data<FillTime> = web::Data::new(Mutex::new(HashMap::new()));
     let tera = Tera::new(&format!("{TEMPLATES_DIR}/**/*"))
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     let server = HttpServer::new(move || {
         App::new()
-            .wrap(Logger::new(r#"[%t] %a "%r" %s"#))
+            .wrap(Logger::new(r#"[%t] %a "%r" %s %Ts"#))
             .app_data(web::Data::new(tera.clone()))
             .app_data(app_state.clone())
+            .app_data(fill_time.clone())
             .service(Files::new("/static", "./static").show_files_listing())
             .route("/", web::get().to(index))
             .route("/constructor", web::get().to(constructor_get))
