@@ -244,9 +244,6 @@ class App:
 
 
 def main() -> None:
-    if "--self-test" in sys.argv:
-        self_test()
-        return
     root = tk.Tk()
     App(root)
     root.mainloop()
