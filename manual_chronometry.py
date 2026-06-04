@@ -13,7 +13,6 @@
 import os
 import re
 import shutil
-import subprocess
 import sys
 import time
 import zipfile
@@ -22,17 +21,18 @@ from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Optional
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import ttkbootstrap as tb
+from ttkbootstrap.constants import BOTH, YES
 
 WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 P, T, TAB, BR, CR = (WORD_NS + x for x in ("p", "t", "tab", "br", "cr"))
 DOCX_PART = "word/document.xml"
 WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+(?:[-'][A-Za-zА-Яа-яЁё0-9]+)?")
 WINDOW_TITLE = "DOCX хронометраж"
-WINDOW_SIZE = "720x245"
-LOG_FILE = "logs.txt"
+WINDOW_SIZE = "720x380"
+LOG_FILE = "manual_logs.txt"
 
 @dataclass(frozen=True)
 class Report:
@@ -142,23 +142,30 @@ class App:
         for widget in self.root.winfo_children():
             widget.destroy()
 
-    def path_row(self, row: int, label: str, command) -> tk.Entry:
-        tk.Label(self.root, text=label).grid(row=row, column=0, padx=16, pady=14, sticky="w")
-        entry = tk.Entry(self.root, width=70)
+    def screen_frame(self) -> tb.Frame:
+        frame = tb.Frame(self.root, padding=15)
+        frame.pack(fill=BOTH, expand=YES)
+        frame.columnconfigure(1, weight=1)
+        return frame
+
+    def path_row(self, parent: tb.Frame, row: int, label: str, command) -> tb.Entry:
+        tb.Label(parent, text=label, bootstyle="secondary").grid(row=row, column=0, padx=16, pady=14, sticky="w")
+        entry = tb.Entry(parent, width=70)
         entry.grid(row=row, column=1, padx=8, pady=14)
-        tk.Button(self.root, text="Выбрать файл", command=command).grid(row=row, column=2, padx=8, pady=14)
+        tb.Button(parent, text="Выбрать файл", bootstyle="secondary-outline", command=command).grid(row=row, column=2, padx=8, pady=14)
         return entry
 
-    def set_entry(self, entry: tk.Entry, path: Path) -> None:
+    def set_entry(self, entry: tb.Entry, path: Path) -> None:
         entry.delete(0, tk.END)
         entry.insert(0, str(path))
 
     def show_start_screen(self) -> None:
         self.clear()
-        self.source_entry = self.path_row(0, "Исходный файл .docx", self.choose_source)
-        self.output_entry = self.path_row(1, "Итоговый файл .docx", self.choose_output)
-        tk.Label(self.root, text="Хронометраж заполнения документов Word",  font=("Times New Roman", 15)).grid(row=2, column=0, columnspan=3, pady=12)
-        tk.Button(self.root, text="Начать заполнение", width=24, command=self.start).grid(row=3, column=0, columnspan=3, pady=12)
+        frame = self.screen_frame()
+        self.source_entry = self.path_row(frame, 0, "Исходный файл .docx", self.choose_source)
+        self.output_entry = self.path_row(frame, 1, "Итоговый файл .docx", self.choose_output)
+        tb.Label(frame, text="Хронометраж заполнения документов Word.\n1.Укажите пути и имена файлов и нажмите 'Начать заполнение'.\n2.Внесите изменения в открывшийся документ.\n3.Сохраните документ (Ctrl-S).\n4.Нажмите 'Готово' в окошке программы.",  font=("Times New Roman", 15), bootstyle="primary").grid(row=2, column=0, columnspan=3, pady=12)
+        tb.Button(frame, text="Начать заполнение", width=24, bootstyle="success", command=self.start).grid(row=3, column=0, columnspan=3, pady=12)
 
     def choose_source(self) -> None:
         filename = filedialog.askopenfilename(title="Выберите исходный DOCX", filetypes=[("Word документы", "*.docx")])
@@ -215,9 +222,10 @@ class App:
 
     def show_work_screen(self) -> None:
         self.clear()
-        tk.Label(self.root, text="1.Сохраните заполненный документ\n2.Нажмите 'Готово'", 
-                 font=("Arial", 20), wraplength=700, justify="center").pack(pady=55)
-        tk.Button(self.root, text="Готово", font=("Arial", 20), width=24, height=2, command=self.finish).pack()
+        frame = self.screen_frame()
+        tb.Label(frame, text="1.Сохраните заполненный документ (Ctrl-S).\n2.Нажмите 'Готово'.", 
+                 font=("Arial", 20), bootstyle="primary", wraplength=700, justify="center").pack(pady=55)
+        tb.Button(frame, text="Готово", width=24, bootstyle="success", command=self.finish).pack()
 
     def finish(self) -> None:
         try:
@@ -244,7 +252,7 @@ class App:
 
 
 def main() -> None:
-    root = tk.Tk()
+    root = tb.Window(themename="flatly")
     App(root)
     root.mainloop()
 
