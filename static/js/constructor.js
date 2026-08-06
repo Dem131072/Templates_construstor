@@ -209,9 +209,8 @@
     }
     function getSelectedText() {
         if (!state.currentRange || !state.currentRange.cloneContents) return '';
-        return state.currentRange.cloneContents().textContent || '';
+        return normalizeSpaces(state.currentRange.cloneContents().textContent || '');
     }
-
 
     // Рассчет позиций для замены на сервере
 
@@ -239,7 +238,7 @@
         var prefixRange = document.createRange();
         prefixRange.setStart(paragraph, 0);
         prefixRange.setEnd(range.startContainer, range.startOffset);
-        return codePointLength(prefixRange.cloneContents().textContent || '');
+        return codePointLength(normalizeSpaces(prefixRange.cloneContents().textContent || ''));
     }
     function clearNode(node) {
         while (node.firstChild) {
@@ -431,9 +430,7 @@
             byParagraph.get(rep.paragraph_index).push(rep);
         }
         byParagraph.forEach(function (group) {
-            group.sort(function (a, b) {
-                return a.id - b.id;
-            });
+            group.sort(function (a, b) { return a.id - b.id; });
             var shifts = [];
             for (var i = 0; i < group.length; i++) {
                 var rep = group[i];
@@ -444,16 +441,18 @@
                     }
                 }
                 var originalOffset = rep.offset - shiftDelta;
-                var nameLen = codePointLength(rep.ph.split(':')[0]);
+                var nameLen = codePointLength((rep.ph.split(':')[0] || '').trim());
                 var oldLen = codePointLength(rep.old);
                 var delta = nameLen - oldLen;
                 shifts.push({ pos: rep.offset, delta: delta });
-                result.push({
-                    old: rep.old,
-                    insert: rep.insert,
-                    paragraph_index: rep.paragraph_index,
-                    offset: originalOffset
-                });
+                if (rep.old !== rep.insert) {
+                    result.push({
+                        old: rep.old,
+                        insert: rep.insert,
+                        paragraph_index: rep.paragraph_index,
+                        offset: originalOffset
+                    });
+                }
             }
         });
         return result;
@@ -488,8 +487,13 @@
             showError('Некорректные поля: ' + invalid.join(', '));
             return;
         }
+        var payload = buildReplacementsPayload();
+        if (!payload.length && !state.replacements.length) {
+            alert('Нет замен для отправки.');
+            return;
+        }
         hideError();
-        els.replacementsInput.value = JSON.stringify(buildReplacementsPayload());
+        els.replacementsInput.value = JSON.stringify(payload);
         els.forceInput.value = force ? 'true' : 'false';
         fetch('/constructor', {
             method: 'POST',
