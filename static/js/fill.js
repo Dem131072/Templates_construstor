@@ -135,25 +135,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         return false;
     };
-    fetch("/templates/" + encodeURIComponent(filename))
-        .then(r => {
-            if (!r.ok) throw new Error("Файл не найден");
-            return r.arrayBuffer();
-        })
-        .then(ab => mammoth.convertToHtml({ arrayBuffer: ab }))
-        .then(result => {
-            let html = result.value;
-            html = html.replace(/\{\{([^\}]+)\}\}/g, (_, rawPh) => {
-                const ph = String(rawPh || "").trim();
-                const name = ph.split(":")[0]?.trim() || ph;
-                return `<span class="placeholder" data-ph="${escapeHtml(ph)}">${escapeHtml(name)}</span>`;
-            });
-            document.getElementById("preview").innerHTML = html;
-            document.querySelectorAll(".fill-field").forEach(syncFieldPreview);
-        })
-        .catch(err => {
-            document.getElementById("preview").innerHTML = `<p class="preview-error">Ошибка: ${escapeHtml(err.message)}</p>`;
-        });
+    document.querySelectorAll(".fill-field").forEach(syncFieldPreview);
     // Если есть пустые поля, сохранять при подтвеждении
     if (form) {
         form.addEventListener("submit", (event) => {
