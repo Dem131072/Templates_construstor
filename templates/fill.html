@@ -110,7 +110,7 @@
         <div class="col-lg-6">
             <h4>Предпросмотр документа</h4>
             <div class="preview-box">
-                <div id="preview">Загрузка предпросмотра...</div>
+                <div id="preview">{{ preview_html | safe }}</div>
             </div>
         </div>
     </div>
@@ -137,7 +137,6 @@
 </div>
 {% endif %}
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script src="https://unpkg.com/mammoth@1.7.1/mammoth.browser.min.js"></script>
 <script src="/static/js/fill.js"></script>
 </body>
 </html>
